@@ -1,20 +1,16 @@
 name: Update Top 10 Crypto RSS feed
 
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
-
 permissions:
   contents: write
-
 
 concurrency:
   group: btc-rss-update
   cancel-in-progress: false
-
 
 jobs:
   update-feed:
@@ -22,7 +18,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
 
       - name: Fetch top 10 prices and write RSS XML
         run: |
@@ -34,8 +29,61 @@ jobs:
           from urllib.request import Request, urlopen
           from xml.etree.ElementTree import Element, SubElement, tostring
 
-
           url = "https://api.coinpaprika.com/v1/tickers?quotes=USD"
           request = Request(url, headers={"Accept": "application/json", "User-Agent": "GitHub-Crypto-RSS/1.0"})
           with urlopen(request, timeout=20) as response:
               tickers = json.loads(response.read().decode("utf-8"))
+          top = sorted(
+              (coin for coin in tickers if isinstance(coin.get("rank"), int) and 1 <= coin["rank"] <= 10),
+              key=lambda coin: coin["rank"],
+          )
+          if len(top) != 10:
+              raise ValueError(f"Expected 10 ranked coins, got {len(top)}")
+          now = datetime.now(timezone.utc)
+
+          def price_text(value):
+              places = 2 if value >= 1 else 4 if value >= 0.01 else 8
+              return f"${value:,.{places}f}"
+
+          rss = Element("rss", {"version": "2.0"})
+          channel = SubElement(rss, "channel")
+          SubElement(channel, "title").text = "Live Top 10 Crypto Prices (USD)"
+          SubElement(channel, "link").text = "https://coinpaprika.com/"
+          SubElement(channel, "description").text = "Top 10 cryptocurrencies by CoinPaprika market-cap rank, with USD price and 24-hour change."
+          SubElement(channel, "language").text = "en-us"
+          SubElement(channel, "lastBuildDate").text = format_datetime(now)
+          for coin in top:
+              quote = coin.get("quotes", {}).get("USD", {})
+              price = float(quote["price"])
+              percent = float(quote["percent_change_24h"])
+              if price <= 0:
+                  raise ValueError(f"Invalid USD price for {coin.get('symbol')}")
+              sign = "+" if percent >= 0 else ""
+              symbol = coin["symbol"]
+              name = coin["name"]
+              item = SubElement(channel, "item")
+              formatted_price = price_text(price)
+              SubElement(item, "title").text = f"#{coin['rank']} {symbol}: {formatted_price} ({sign}{percent:.2f}% in 24h)"
+              SubElement(item, "description").text = (
+                  f"{name} ({symbol}): {formatted_price} USD. 24-hour change: {sign}{percent:.2f}%. "
+                  f"Market-cap rank: #{coin['rank']}."
+              )
+              SubElement(item, "guid", {"isPermaLink": "false"}).text = f"{symbol}-{now.isoformat()}"
+              SubElement(item, "pubDate").text = format_datetime(now)
+          output = Path("docs/btc.xml")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_bytes(b"<?xml version='1.0' encoding='utf-8'?>\n" + tostring(rss, encoding="utf-8"))
+          print("Updated top 10 crypto prices: " + ", ".join(coin["symbol"] for coin in top))
+          PY
+
+      - name: Save updated feed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/btc.xml
+          if git diff --cached --quiet; then
+            echo "Feed is unchanged; no commit needed."
+          else
+            git commit -m "Update top 10 crypto RSS feed"
+            git push
+          fi

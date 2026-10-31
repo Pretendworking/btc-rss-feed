@@ -1,0 +1,76 @@
+name: Update BTC RSS feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: btc-rss-update
+  cancel-in-progress: false
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Fetch price and write RSS XML
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from email.utils import format_datetime
+          import json
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from xml.etree.ElementTree import Element, SubElement, tostring
+
+          url = "https://api.exchange.coinbase.com/products/BTC-USD/stats"
+          request = Request(url, headers={"Accept": "application/json", "User-Agent": "GitHub-BTC-RSS/1.0"})
+          with urlopen(request, timeout=20) as response:
+              stats = json.loads(response.read().decode("utf-8"))
+          price = float(stats["last"])
+          opening = float(stats["open"])
+          if price <= 0 or opening <= 0:
+              raise ValueError("Coinbase returned an invalid BTC/USD price")
+          change = price - opening
+          percent = change / opening * 100
+          now = datetime.now(timezone.utc)
+          sign = "+" if change >= 0 else ""
+
+          rss = Element("rss", {"version": "2.0"})
+          channel = SubElement(rss, "channel")
+          SubElement(channel, "title").text = "Live BTC/USD Price"
+          SubElement(channel, "link").text = "https://www.coinbase.com/price/bitcoin"
+          SubElement(channel, "description").text = "Bitcoin price in USD and rolling 24-hour change from Coinbase Exchange."
+          SubElement(channel, "language").text = "en-us"
+          SubElement(channel, "lastBuildDate").text = format_datetime(now)
+          item = SubElement(channel, "item")
+          SubElement(item, "title").text = f"BTC/USD: ${price:,.2f} ({sign}{percent:.2f}% in 24h)"
+          SubElement(item, "description").text = (
+              f"Bitcoin: ${price:,.2f} USD. 24-hour change: {sign}${change:,.2f} "
+              f"({sign}{percent:.2f}%). 24-hour open: ${opening:,.2f}."
+          )
+          SubElement(item, "guid", {"isPermaLink": "false"}).text = now.isoformat()
+          SubElement(item, "pubDate").text = format_datetime(now)
+          output = Path("docs/btc.xml")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_bytes(b"<?xml version='1.0' encoding='utf-8'?>\n" + tostring(rss, encoding="utf-8"))
+          print(f"Updated BTC/USD to ${price:,.2f}; 24-hour change {sign}{percent:.2f}%")
+          PY
+
+      - name: Save updated feed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/btc.xml
+          if git diff --cached --quiet; then
+            echo "Feed is unchanged; no commit needed."
+          else
+            git commit -m "Update BTC/USD RSS feed"
+            git push
+          fi

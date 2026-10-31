@@ -63,7 +63,7 @@ jobs:
               name = coin["name"]
               item = SubElement(channel, "item")
               formatted_price = price_text(price)
-              SubElement(item, "title").text = f"#{coin['rank']} {symbol}: ${formatted_price} ({sign}{percent:.2f}% in 24h)"
+              SubElement(item, "title").text = f"#{coin['rank']} {symbol}: {formatted_price} ({sign}{percent:.2f}% in 24h)"
               SubElement(item, "description").text = (
                   f"{name} ({symbol}): {formatted_price} USD. 24-hour change: {sign}{percent:.2f}%. "
                   f"Market-cap rank: #{coin['rank']}."
